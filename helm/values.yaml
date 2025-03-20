@@ -1,0 +1,27 @@
+solaceAgentMeshNamespace: "discord/"
+solaceDevMode: "false"
+solaceBrokerUrl:
+solaceBrokerVpn: "default"
+solaceBrokerUsername: "default"
+solaceBrokerPassword: "default"
+llmServiceApiKey:
+llmServiceEndpoint: "https://lite-llm.mymaas.net/"
+llmServicePlanningModelName: "openai/claude-3-7-sonnet"
+embeddingServiceModelName: "openai/bedrock-cohere-embed-english-v3"
+embeddingServiceApiKey:
+embeddingServiceEndpoint: "https://lite-llm.mymaas.net/"
+runtimeConfigPath: "build/config.yaml"
+restApiServerInputPort: "5050"
+restApiServerHost: "127.0.0.1"
+restApiServerInputEndpoint: "/api/v1/request"
+webuiEnabled: "True"
+webuiPort: "5001"
+webuiHost: "127.0.0.1"
+webuiResponseApiUrl: "http://127.0.0.1:5050/api/v1/request"
+webuiFrontendServerUrl: "http://127.0.0.1:5001"
+webuiFrontendUrl: "http://127.0.0.1:5001"
+discordBotToken:
+kubernetesNamespace: "discord"
+kubernetesDeploymentName: "solace-agent-mesh"
+image:
+imageTag: "latest"
