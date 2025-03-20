@@ -416,6 +416,7 @@ class DiscordSender(threading.Thread):
             text = text[:2000]
 
         view = self.create_feedback_view() if state.complete and self.feedback_endpoint is not None else None
+        text = text or "\u200b"
 
         return text_channel, view, text
 
