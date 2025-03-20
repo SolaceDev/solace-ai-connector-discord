@@ -250,6 +250,8 @@ class DiscordReceiver(threading.Thread):
         else:
             thread = await message.create_thread(name=trunc(message.clean_content, 20), auto_archive_duration=60)
             thread_id = thread.id
+            #Start a typing animation (lasts ten seconds)
+            await thread.typing()
 
         asyncio.create_task(thread.typing().wrapped_typer())
 
@@ -287,6 +289,7 @@ class DiscordReceiver(threading.Thread):
         solace_message = Message(payload=payload, user_properties=user_properties)
         solace_message.set_previous(payload)
         self.input_queue.put(solace_message)
+        
 
     def download_file_as_base64_string(self, file_url):
         headers = {"Authorization": "Bearer " + self.discord_bot_token}
@@ -345,10 +348,7 @@ class DiscordReceiver(threading.Thread):
             if isinstance(message.channel, Thread) and isinstance(message.channel.parent, TextChannel):
                 if "I am satisfied with my care" in message.content:
                   return await message.channel.delete()
-
-                first_message = await message.channel.parent.fetch_message(message.channel.id)
-
-                if first_message.author != message.author:
+                if message.channel.owner_id != self.app.user.id:
                     return
             elif not isinstance(message.channel, DMChannel) and not self.app.user.mentioned_in(message):
                 return
