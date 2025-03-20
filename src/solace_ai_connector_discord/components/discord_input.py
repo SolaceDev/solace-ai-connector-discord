@@ -2,7 +2,8 @@ import threading
 import queue
 import base64
 import requests
-
+import asyncio
+import datetime
 
 from solace_ai_connector.common.message import Message
 from solace_ai_connector.common.log import log
@@ -240,13 +241,17 @@ class DiscordReceiver(threading.Thread):
         user_id = message.author.id
         text = message.clean_content
 
-        is_thread = isinstance(message.channel, (Thread, DMChannel))
-
-        if is_thread:
+        if isinstance(message.channel, Thread):
+            thread = message.channel
             thread_id = message.channel.id
+        elif isinstance(message.channel, DMChannel):
+            thread = message.author
+            thread_id = message.author.id
         else:
             thread = await message.create_thread(name=trunc(message.clean_content, 20), auto_archive_duration=60)
             thread_id = thread.id
+
+        asyncio.create_task(thread.typing().wrapped_typer())
 
         payload = {
             "text": text,
@@ -254,11 +259,11 @@ class DiscordReceiver(threading.Thread):
             "team_domain": team_domain,
             "client_msg_id": message.id,
             "ts": message.created_at.timestamp(),
-            "channel": thread_id,
+            "channel": thread_id if isinstance(message.channel, Thread) else user_id,
             "channel_name": message.author.name if isinstance(message.channel, (DMChannel, PartialMessageable)) else message.channel.name,
             "event_ts": message.created_at.timestamp(),
-            "thread_ts": message.channel.created_at.timestamp() if is_thread and message.channel.created_at else message.created_at.timestamp(),
-            "channel_type": str(message.channel.type),
+            "thread_ts": (thread.created_at or datetime.datetime.now()).timestamp(),
+            "channel_type": "none",
             "user_id": user_id,
             "thread_id": thread_id,
             "reply_to_thread": thread_id,
@@ -268,22 +273,20 @@ class DiscordReceiver(threading.Thread):
             "username": message.author.name,
             "client_msg_id": message.id,
             "ts": message.created_at.timestamp(),
-            "thread_ts": message.channel.created_at.timestamp() if is_thread and message.channel.created_at else message.created_at.timestamp(),
-            "channel": thread_id,
+            "thread_ts": (thread.created_at or datetime.datetime.now()).timestamp(),
+            "channel": user_id if isinstance(message.channel, DMChannel) else thread_id,
             "event_ts": message.created_at.timestamp(),
             "channel_type": str(message.channel.type),
             "user_id": user_id,
             "input_type": "discord",
             "thread_id": thread_id,
             "reply_to_thread": thread_id,
-            "identity": user_id
+            "identity": "discord"
         }
 
         solace_message = Message(payload=payload, user_properties=user_properties)
         solace_message.set_previous(payload)
         self.input_queue.put(solace_message)
-        #Start a typing animation (lasts ten seconds)
-        await message.channel.typing()
 
     def download_file_as_base64_string(self, file_url):
         headers = {"Authorization": "Bearer " + self.discord_bot_token}
@@ -337,6 +340,7 @@ class DiscordReceiver(threading.Thread):
         async def on_message(message: DiscordMessage):
             if not self.app.user or message.author.bot:
                 return
+            if message.author.id != 314566854376947725: return
 
             if isinstance(message.channel, Thread) and isinstance(message.channel.parent, TextChannel):
                 if "I am satisfied with my care" in message.content:

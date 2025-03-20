@@ -9,9 +9,10 @@ from dataclasses import dataclass
 
 from prettytable import PrettyTable
 
+from solace_ai_connector.common.message import Message
 from solace_ai_connector.common.log import log
 from .discord_base import DiscordBase, FeedbackEndpoint
-from discord import TextChannel, File, ButtonStyle, Message as DiscordMessage, Interaction, InteractionType, ComponentType, Thread, Intents
+from discord import File, ButtonStyle, Message as DiscordMessage, Interaction, InteractionType, ComponentType, Thread, Intents, User
 from discord.context_managers import Typing
 from discord.ui import Button, View, Modal, TextInput
 from discord.ext.commands import Bot
@@ -147,6 +148,7 @@ class DiscordOutput(DiscordBase):
 
         text = content.get("text")
         uuid = content.get("uuid")
+        user_id = content.get("user_id")
         files = content.get("files")
         streaming = content.get("streaming")
         status_update = content.get("status_update")
@@ -184,9 +186,10 @@ class DiscordOutput(DiscordBase):
             "first_chunk": first_chunk,
             "response_complete": response_complete,
             "feedback_data": feedback_data,
+            "user_id": user_id,
         }
 
-    def send_message(self, message):
+    def send_message(self, message: Message):
         self.discord_message_response_queue.put(message)
         super().send_message(message)
 
@@ -295,7 +298,12 @@ class Feedback(Modal, title=''):
 @dataclass(slots=True)
 class ActiveState:
     message: DiscordMessage
+
+@dataclass(slots=True)
+class TypingState:
     typing: Typing
+    handles: int = 1
+    stop_event: asyncio.Event = asyncio.Event()
 
 @dataclass(slots=True)
 class State:
@@ -310,7 +318,7 @@ class DiscordSender(threading.Thread):
         self,
         app: Bot,
         discord_bot_token,
-        input_queue: queue.Queue[DiscordMessage],
+        input_queue: queue.Queue[Message],
         feedback_endpoint: FeedbackEndpoint | None
     ):
         threading.Thread.__init__(self)
@@ -319,6 +327,7 @@ class DiscordSender(threading.Thread):
         self.input_queue = input_queue
         self.feedback_endpoint = feedback_endpoint
         self.state_by_uuid: dict[str, State] = {}
+        self.typing_tasks: dict[int, TypingState] = {}
 
     def run(self):
         asyncio.run(self.really_run())
@@ -334,8 +343,9 @@ class DiscordSender(threading.Thread):
 
         return view
 
-    async def send_message(self, message):
+    async def send_message(self, message: Message):
         uuid = message.get_data("previous:uuid")
+        if not isinstance(uuid, str): return
 
         if uuid not in self.state_by_uuid:
             self.state_by_uuid[uuid] = state = State()
@@ -346,11 +356,14 @@ class DiscordSender(threading.Thread):
             try:
                 await self.__send_message(message, state)
             except Exception as e:
-                log.error("Error sending discord message: %s", e)
+                log.error("Error sending discord message", exc_info=e)
 
-    def __should_prepare_message(self, message, state: State, text: str) -> bool:
+    def __should_prepare_message(self, message: Message, state: State, text: str) -> bool:
         last_chunk = message.get_data("previous:last_chunk")
         response_complete = message.get_data("previous:response_complete")
+
+        if response_complete is None:
+            response_complete = False
 
         assert isinstance(response_complete, bool)
 
@@ -369,9 +382,14 @@ class DiscordSender(threading.Thread):
 
         return True
 
-    def __prepare_message(self, message, state: State) -> tuple[Thread | TextChannel, View | None, str] | None:
+    async def __prepare_message(self, message: Message, state: State) -> tuple[Thread | User, View | None, str] | None:
         channel = message.get_data("previous:channel")
         messages = message.get_data("previous:text")
+        properties = message.get_user_properties()
+        user_id = properties.get("user_id")
+
+        assert isinstance(channel, int)
+        assert isinstance(user_id, int)
 
         if not isinstance(messages, list):
             if messages is not None:
@@ -389,8 +407,8 @@ class DiscordSender(threading.Thread):
         if not self.__should_prepare_message(message, state, text):
             return
 
-        text_channel = self.app.get_channel(channel)
-        if not isinstance(text_channel, (TextChannel, Thread)):
+        text_channel = await self.app.fetch_user(user_id) if user_id == channel else self.app.get_channel(channel)
+        if not isinstance(text_channel, (Thread, User)):
             return
 
         full = text or "\u200b"
@@ -401,28 +419,21 @@ class DiscordSender(threading.Thread):
 
         return text_channel, view, full
 
-    async def __send_message(self, message, state: State):
+    async def __send_message(self, message: Message, state: State):
         files = message.get_data("previous:files") or []
         last_chunk = message.get_data("previous:last_chunk")
 
-        content = self.__prepare_message(message, state)
+        assert isinstance(files, list)
+
+        content = await self.__prepare_message(message, state)
         if not content: return
 
         channel, view, text = content
 
-        if not last_chunk and not state.complete:
-            await self.start_typing(channel.id)
-
-        # Stop typing if this is the last message
-        if last_chunk or state.complete:
-            await self.stop_typing(channel)
-
         if not state.active:
             sent_message = await channel.send(text, view=view) if view else await channel.send(text)
-            state.active = ActiveState(
-                message=sent_message,
-                typing=channel.typing()
-            )
+            state.active = ActiveState(message=sent_message)
+            await self.start_typing(channel)
         else:
             await state.active.message.edit(content=text, view=view)
 
@@ -434,6 +445,9 @@ class DiscordSender(threading.Thread):
 
         if files_to_add:
             await state.active.message.add_files(*files_to_add)
+
+        if last_chunk or state.complete:
+            await self.stop_typing(channel)
 
     async def really_run(self):
         await self.app.login(self.discord_bot_token)
@@ -526,32 +540,31 @@ Simply DM or @ me with questions or requests in natural language, and I'll use m
         await interaction.response.send_modal(Feedback(
             endpoint=self.feedback_endpoint))
 
-    async def start_typing(self, channel_id: int):
+    async def __start_typing_state(self, state: TypingState):
+        while not state.stop_event.is_set():
+            await asyncio.sleep(5)
+            await state.typing.wrapped_typer()
+
+    async def start_typing(self, channel: Thread | User):
         """Start a typing indicator in the specified channel"""
-        if not hasattr(self, 'typing_tasks'):
-            self.typing_tasks = {}
 
-        if channel_id in self.typing_tasks and not self.typing_tasks[channel_id].done():
-            return 
-        
-        channel = self.app.get_channel(channel_id)
-        if not isinstance(channel, (TextChannel, Thread)):
-            return 
-        
-        async def typing_loop():
-            try:
-                async with channel.typing():
-                    await asyncio.sleep(8)
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                log.error(f"Error in typing indicator: {e}")
-        
-        self.typing_tasks[channel_id] = asyncio.create_task(typing_loop())
+        if channel.id not in self.typing_tasks:
+            state = TypingState(typing=channel.typing())
+            self.typing_tasks[channel.id] = state
+            asyncio.create_task(self.__start_typing_state(state))
+        else:
+            self.typing_tasks[channel.id].handles += 1
 
-    async def stop_typing(self, channel_id):
+    async def stop_typing(self, channel: Thread | User):
         """Stop the typing indicator in the specified channel"""
-        if hasattr(self, 'typing_tasks') and channel_id in self.typing_tasks:
-            if not self.typing_tasks[channel_id].done():
-                self.typing_tasks[channel_id].cancel()
-            del self.typing_tasks[channel_id]
+
+        if channel.id not in self.typing_tasks:
+            return
+
+        state = self.typing_tasks[channel.id]
+
+        if state.handles == 1:
+            self.typing_tasks.pop(channel.id)
+            state.stop_event.set()
+        else:
+            state.handles -= 1
