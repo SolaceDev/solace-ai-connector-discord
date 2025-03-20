@@ -370,6 +370,9 @@ class DiscordSender(threading.Thread):
 
         state.complete = response_complete
 
+        if not text:
+            return False
+
         if len(text) <= len(state.text) and not last_chunk:
             return False
 
@@ -412,13 +415,12 @@ class DiscordSender(threading.Thread):
         if not isinstance(text_channel, (Thread, User)):
             return
 
-        full = text or "\u200b"
-        if len(full) > 2000:
-            full = full[:2000]
+        if len(text) > 2000:
+            text = text[:2000]
 
         view = self.create_feedback_view() if state.complete and self.feedback_endpoint is not None else None
 
-        return text_channel, view, full
+        return text_channel, view, text
 
     async def __send_message(self, message: Message, state: State):
         files = message.get_data("previous:files") or []
