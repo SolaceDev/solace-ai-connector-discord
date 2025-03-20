@@ -343,7 +343,6 @@ class DiscordReceiver(threading.Thread):
         async def on_message(message: DiscordMessage):
             if not self.app.user or message.author.bot:
                 return
-            if message.author.id != 314566854376947725: return
 
             if isinstance(message.channel, Thread) and isinstance(message.channel.parent, TextChannel):
                 if "I am satisfied with my care" in message.content:
