@@ -370,9 +370,6 @@ class DiscordSender(threading.Thread):
 
         state.complete = response_complete
 
-        if not text:
-            return False
-
         if len(text) <= len(state.text) and not last_chunk:
             return False
 
