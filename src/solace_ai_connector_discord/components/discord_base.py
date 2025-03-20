@@ -2,8 +2,20 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import mimetypes
+
+from solace_agent_mesh.services.file_service.file_manager.file_manager_base import FileManagerBase
 
 from solace_ai_connector.components.component_base import ComponentBase
+
+def _get_mime_type(self, file_name: str) -> str:
+        """
+        Get the MIME type of a file.
+        """
+        mime_type, _ = mimetypes.guess_type(file_name)
+        return mime_type or ""
+
+FileManagerBase._get_mime_type = _get_mime_type
 
 @dataclass(slots=True)
 class FeedbackEndpoint:

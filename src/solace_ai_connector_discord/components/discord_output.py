@@ -6,6 +6,7 @@ import threading
 import queue
 import asyncio
 from dataclasses import dataclass
+import io
 
 from prettytable import PrettyTable
 
@@ -441,7 +442,7 @@ class DiscordSender(threading.Thread):
 
         for file in files:
             file_content = base64.b64decode(file["content"])
-            files_to_add.append(File(fp=file_content, filename=file["name"]))
+            files_to_add.append(File(fp=io.BytesIO(file_content), filename=file["name"]))
 
         if files_to_add:
             await state.active.message.add_files(*files_to_add)
